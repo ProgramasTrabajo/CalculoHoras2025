@@ -1,37 +1,13 @@
 import streamlit as st
 import pandas as pd
-from calculo_horas import procesar_dataframe
+from datetime import datetime, timedelta, time
+
+st.set_page_config(page_title="Procesador de Horas", page_icon="🕒")
 
 st.title("🕒 Procesador de Horas Trabajadas")
-
 st.markdown("""
-Sube tu archivo **Formato_Carga(C).xlsx** con los registros de horas trabajadas para generar el reporte con horas normales, extras y nocturnas.
+Sube tu archivo **Formato_Carga(C).xlsx** para calcular automáticamente horas normales, extras, nocturnas y más.
 """)
-
-archivo = st.file_uploader("📁 Sube el archivo Excel", type=["xlsx"])
-
-if archivo:
-    try:
-        df = pd.read_excel(archivo, sheet_name="Horas")
-        df_resultado = procesar_dataframe(df)
-        st.success("✅ Archivo procesado correctamente.")
-        st.dataframe(df_resultado)
-
-        # Descargar resultado
-        from io import BytesIO
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_resultado.to_excel(writer, index=False)
-        st.download_button("⬇️ Descargar reporte", data=output.getvalue(),
-                           file_name="reporte_horas_final(C).xlsx")
-    except Exception as e:
-        st.error(f"❌ Error procesando archivo: {e}")
-
-
-# --- Lógica de cálculo ---
-
-import pandas as pd
-from datetime import datetime, timedelta, time
 
 def convertir_a_str(hora):
     if isinstance(hora, time):
@@ -108,3 +84,29 @@ def procesar_dataframe(df):
 
     resultados = df.apply(procesar_fila, axis=1)
     return pd.concat([df, resultados], axis=1)
+
+archivo = st.file_uploader("📁 Selecciona el archivo Excel", type=["xlsx"])
+
+if archivo:
+    if "Formato_Carga" not in archivo.name:
+        st.warning("⚠️ Se recomienda que el archivo se llame 'Formato_Carga(C).xlsx' para evitar confusión.")
+
+    try:
+        df = pd.read_excel(archivo, sheet_name="Horas")
+        st.success("✅ Archivo cargado correctamente.")
+        st.markdown("### Vista previa de datos:")
+        st.dataframe(df.head())
+
+        resultado = procesar_dataframe(df)
+        st.markdown("### ✅ Resultado procesado:")
+        st.dataframe(resultado)
+
+        from io import BytesIO
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            resultado.to_excel(writer, index=False)
+        st.download_button("⬇️ Descargar reporte", data=output.getvalue(),
+                           file_name="reporte_horas_final(C).xlsx")
+
+    except Exception as e:
+        st.error(f"❌ Error procesando archivo: {e}")
