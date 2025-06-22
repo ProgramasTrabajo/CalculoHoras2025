@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime, timedelta, time
 
 st.set_page_config(page_title="Procesador de Horas", page_icon="🕒")
-
 st.title("🕒 Procesador de Horas Trabajadas")
 st.markdown("""
 Sube tu archivo **Formato_Carga(C).xlsx** para calcular automáticamente horas normales, extras, nocturnas y más.
@@ -24,6 +23,7 @@ def calcular_horas_extra_reales(inicio_raw, fin_raw, refrigerio_inicio_raw=None,
         if fin <= inicio:
             fin += timedelta(days=1)
 
+        # Descuento por refrigerio: 60 min (13:00–14:00) o 45 min (12:00–12:45)
         descuento_refrigerio_min = 0
         if refrigerio_inicio_raw and refrigerio_fin_raw:
             ri = datetime.strptime(convertir_a_str(refrigerio_inicio_raw), formato).time()
