@@ -179,31 +179,37 @@ uploaded_file = st.file_uploader("Subir archivo de Excel", type="xlsx")
 if uploaded_file:
     # Cargar el archivo subido
     df = pd.read_excel(uploaded_file)
-    st.write("Datos cargados:", df.head())  # Mostrar las primeras filas
 
-    # Aplicar procesamiento de filas
-    resultados = df.apply(procesar_fila, axis=1, result_type="expand")
-    df_resultado = pd.concat([df, resultados], axis=1)
+    # Verificar si el archivo tiene las columnas necesarias
+    expected_columns = ["Hora Inicio Labores", "Hora Término Labores", "DIA"]
+    if not all(col in df.columns for col in expected_columns):
+        st.error("El archivo cargado no contiene las columnas necesarias.")
+    else:
+        columnas_ingreso = df.columns.tolist()
 
-    # Agregar la columna "DIA-TRA"
-    df_resultado["DIA-TRA"] = df_resultado.apply(calcular_dia_tra, axis=1)
+        # Aplicar procesamiento de filas
+        resultados = df.apply(procesar_fila, axis=1, result_type="expand")
+        df_resultado = pd.concat([df, resultados], axis=1)
 
-    # Reordenar las columnas según tu requerimiento
-    columnas_orden = [
-        "Horas Diurnas", "Extra 25%", "Extra 35%", "Horas Nocturnas",
-        "Extra 25% Nocturna", "Extra 35% Nocturna",
-        "Horas Domingo/Feriado", "Horas Extra Domingo/Feriado",
-        "Horas Normales", "Total Horas"
-    ]
-    df_resultado = df_resultado[columnas_ingreso + ["DIA-TRA"] + columnas_orden]
+        # Agregar la columna "DIA-TRA"
+        df_resultado["DIA-TRA"] = df_resultado.apply(calcular_dia_tra, axis=1)
 
-    # Mostrar el reporte procesado
-    st.write("Reporte procesado:", df_resultado)
+        # Reordenar las columnas según tu requerimiento
+        columnas_orden = [
+            "Horas Diurnas", "Extra 25%", "Extra 35%", "Horas Nocturnas",
+            "Extra 25% Nocturna", "Extra 35% Nocturna",
+            "Horas Domingo/Feriado", "Horas Extra Domingo/Feriado",
+            "Horas Normales", "Total Horas"
+        ]
+        df_resultado = df_resultado[columnas_ingreso + ["DIA-TRA"] + columnas_orden]
 
-    # Botón para descargar el archivo procesado
-    st.download_button(
-        label="Descargar reporte",
-        data=df_resultado.to_excel(index=False),
-        file_name="reporte_horas_final.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        # Mostrar el reporte procesado
+        st.write("Reporte procesado:", df_resultado)
+
+        # Botón para descargar el archivo procesado
+        st.download_button(
+            label="Descargar reporte",
+            data=df_resultado.to_excel(index=False),
+            file_name="reporte_horas_final.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
