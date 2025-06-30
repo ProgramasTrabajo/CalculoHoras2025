@@ -1,215 +1,165 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, time
+import io
+from datetime import datetime
+from work_hours_calculator import WorkHoursCalculator
 
-# --- FUNCIONES BASE ---
-def convertir_a_str(hora):
-    if isinstance(hora, time):
-        return hora.strftime("%H:%M:%S")
-    elif isinstance(hora, str):
-        return hora
-    return None
+@st.cache_data
+def convert_df_to_excel(df):
+    """Convert DataFrame to Excel format for download"""
+    # Create a temporary filename
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+        df.to_excel(tmp_file.name, index=False, engine='xlsxwriter', sheet_name='Horas Procesadas')
+        tmp_file.seek(0)
+        
+        # Read the file content
+        with open(tmp_file.name, 'rb') as f:
+            data = f.read()
+        
+        # Clean up the temporary file
+        os.unlink(tmp_file.name)
+        
+    return data
 
-def calcular_horas(inicio_raw, fin_raw, refrigerio_inicio_raw=None, refrigerio_fin_raw=None):
-    formato = "%H:%M:%S"
-    inicio_str = convertir_a_str(inicio_raw)
-    fin_str = convertir_a_str(fin_raw)
-    refrigerio_inicio_str = convertir_a_str(refrigerio_inicio_raw)
-    refrigerio_fin_str = convertir_a_str(refrigerio_fin_raw)
-
-    if not inicio_str or not fin_str:
-        return [0]*8
-
-    try:
-        inicio = datetime.strptime(inicio_str, formato)
-        fin = datetime.strptime(fin_str, formato)
-        if fin <= inicio:
-            fin += timedelta(days=1)
-
-        minutos_refrigerio = 0
-        if refrigerio_inicio_str and refrigerio_fin_str:
-            ri = datetime.strptime(refrigerio_inicio_str, formato).time()
-            rf = datetime.strptime(refrigerio_fin_str, formato).time()
-            if ri == time(13, 0) and rf == time(14, 0):
-                minutos_refrigerio = 60
-            elif ri == time(12, 0) and rf == time(12, 45):
-                minutos_refrigerio = 45
-
-        minutos_diurnos_total = 0
-        minutos_nocturnos_total = 0
-
-        actual = inicio
-        while actual < fin:
-            hora = actual.time()
-            if time(6, 0) <= hora < time(22, 0):
-                minutos_diurnos_total += 1
-            else:
-                minutos_nocturnos_total += 1
-            actual += timedelta(minutes=1)
-
-        total_minutos = minutos_diurnos_total + minutos_nocturnos_total
-
-        if minutos_refrigerio > 0:
-            if minutos_diurnos_total >= minutos_refrigerio:
-                minutos_diurnos_total -= minutos_refrigerio
-            else:
-                restante = minutos_refrigerio - minutos_diurnos_total
-                minutos_diurnos_total = 0
-                minutos_nocturnos_total = max(0, minutos_nocturnos_total - restante)
-            total_minutos -= minutos_refrigerio
-
-        minutos_normales = min(total_minutos, 480)
-        minutos_extras = max(0, total_minutos - 480)
-
-        minutos_diurnos_normales = 0
-        minutos_nocturnos_normales = 0
-        actual = inicio
-        minutos_asignados = 0
-        while actual < fin and minutos_asignados < minutos_normales:
-            hora = actual.time()
-            if time(6, 0) <= hora < time(22, 0):
-                minutos_diurnos_normales += 1
-            else:
-                minutos_nocturnos_normales += 1
-            minutos_asignados += 1
-            actual += timedelta(minutes=1)
-
-        horas_diurnas = minutos_diurnos_normales / 60
-        horas_nocturnas = minutos_nocturnos_normales / 60
-
-        horas_extra_25 = min(minutos_extras, 120) / 60
-        horas_extra_35 = max(minutos_extras - 120, 0) / 60
-
-        horas_extra_25_nocturna = 0
-        horas_extra_35_nocturna = 0
-
-        if inicio.time() >= time(15, 0) and inicio.time() < time(20, 0):
-            horas_extra_25_nocturna = horas_extra_25
-            horas_extra_35_nocturna = round(horas_diurnas, 2) - horas_extra_25_nocturna
-            horas_extra_25 = 0
-            horas_extra_35 = horas_extra_35 - horas_extra_35_nocturna
-
-        if inicio.time() >= time(20, 0) and inicio.time() < time(22, 0):
-            horas_extra_25_nocturna = round(horas_diurnas, 2)
-            horas_extra_35_nocturna = 0
-            horas_extra_25 = horas_extra_25 - horas_extra_25_nocturna
-
-        if fin.time() >= time(22, 0):
-            horas_extra_35_nocturna = ((fin - datetime.combine(fin.date(), time(22, 0))).seconds / 60)/60
-            horas_extra_35 = horas_extra_35-horas_extra_35_nocturna
-
-        if fin.time() < time(6, 0):
-            inicio = datetime.combine(fin.date(), time(22, 0)) - timedelta(days=1)  # 10:00 PM del día anterior
-            diferencia = fin - inicio
-            horas_extra_35_nocturna = (diferencia.seconds / 60) / 60
-            horas_extra_35 = horas_extra_35-horas_extra_35_nocturna
-
-        total_horas = (minutos_diurnos_total + minutos_nocturnos_total) / 60
-
-        return max(round(horas_diurnas, 2), 0), max(round(horas_nocturnas, 2), 0), \
-               max(round(minutos_normales / 60, 2), 0), max(round(horas_extra_25, 2), 0), \
-               max(round(horas_extra_35, 2), 0), max(round(horas_extra_25_nocturna, 2), 0), \
-               max(round(horas_extra_35_nocturna, 2), 0), max(round(total_horas, 2), 0)
-
-    except Exception:
-        return [0]*8
-
-# --- PROCESAR FILA ---
-def procesar_fila(row):
-    resultado = calcular_horas(
-        row["Hora Inicio Labores"],
-        row["Hora Término Labores"],
-        row.get("Hora Inicio Refrigerio", None),
-        row.get("Hora Término Refrigerio", None)
+def main():
+    st.set_page_config(
+        page_title="Calculadora de Horas de Trabajo",
+        page_icon="⏰",
+        layout="wide"
     )
-
-    dia = str(row["DIA"]).strip().lower()
-    dias_normales = ['lunes', 'martes', 'miércoles', 'miercoles', 'jueves', 'viernes', 'sábado', 'sabado']
-
-    if dia in dias_normales:
-        return pd.Series({
-            "Horas Diurnas": resultado[0],
-            "Extra 25%": resultado[3],
-            "Extra 35%": resultado[4],
-            "Horas Nocturnas": resultado[1],
-            "Extra 25% Nocturna": resultado[5],
-            "Extra 35% Nocturna": resultado[6],
-            "Horas Domingo/Feriado": 0,
-            "Horas Extra Domingo/Feriado": 0,
-            "Horas Normales": resultado[2],
-            "Total Horas": resultado[7],
-        })
-    else:
-        total_horas = resultado[7]
-        base = min(total_horas, 8)
-        extra = max(total_horas - 8, 0)
-        return pd.Series({
-            "Horas Diurnas": 0,
-            "Extra 25%": 0,
-            "Extra 35%": 0,
-            "Horas Nocturnas": 0,
-            "Extra 25% Nocturna": 0,
-            "Extra 35% Nocturna": 0,
-            "Horas Domingo/Feriado": round(base, 2),
-            "Horas Extra Domingo/Feriado": round(extra, 2),
-            "Horas Normales": 0,
-            "Total Horas": total_horas,
-        })
-
-# --- CALCULAR DIA-TRA Y MODIFICAR SI ES DESCANSO MÉDICO ---
-def calcular_dia_tra(row):
-    dia = row["DIA"].strip().lower()
-    es_laboral = dia in ["lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado"]
-    tiene_horas = row["Horas Diurnas"] + row["Horas Nocturnas"] > 0
     
-    # Condición para Descanso Médico
-    if row["Labor/Actividad"] == "Descanso Médico":
-        return "DM"
+    st.title("⏰ Calculadora de Horas de Trabajo")
+    st.markdown("Sube un archivo Excel para calcular horas de trabajo con horas extras y diferenciales de turno")
     
-    return 1 if es_laboral and tiene_horas else 0
-
-# --- STREAMLIT INTERFACE ---
-
-# Cargar archivo
-st.title("Reporte de Horas Laborales")
-st.write("Cargue el archivo de Excel con los datos para procesar.")
-
-uploaded_file = st.file_uploader("Subir archivo de Excel", type="xlsx")
-
-if uploaded_file:
-    # Cargar el archivo subido
-    df = pd.read_excel(uploaded_file)
-
-    # Verificar si el archivo tiene las columnas necesarias
-    expected_columns = ["Hora Inicio Labores", "Hora Término Labores", "DIA"]
-    if not all(col in df.columns for col in expected_columns):
-        st.error("El archivo cargado no contiene las columnas necesarias.")
+    # Sidebar with instructions
+    with st.sidebar:
+        st.header("📋 Instrucciones")
+        st.markdown("""
+        1. **Subir Archivo Excel**: Selecciona tu archivo Excel de horas de trabajo
+        2. **Columnas Requeridas**:
+           - DIA (Día de la semana)
+           - Hora Inicio Labores (Hora de inicio)
+           - Hora Término Labores (Hora de término)
+           - Labor/Actividad (Actividad laboral)
+        3. **Columnas Opcionales**:
+           - Hora Inicio Refrigerio (Inicio de refrigerio)
+           - Hora Término Refrigerio (Fin de refrigerio)
+        4. **Descargar**: Obtén tu archivo Excel procesado
+        """)
+        
+        st.header("📊 Tipos de Cálculo")
+        st.markdown("""
+        - **Horas Regulares**: Diurnas/Nocturnas
+        - **Horas Extras**: Tarifas del 25% y 35%
+        - **Horas Fin de Semana/Feriados**
+        - **Licencia Médica**: Manejo especial
+        """)
+    
+    # File upload section
+    st.header("📁 Subir Archivo")
+    uploaded_file = st.file_uploader(
+        "Selecciona un archivo Excel",
+        type=['xlsx', 'xls'],
+        help="Sube tu archivo Excel de horas de trabajo para procesarlo"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Display file info
+            st.success(f"✅ Archivo subido: {uploaded_file.name}")
+            
+            # Read the Excel file
+            with st.spinner("Leyendo archivo Excel..."):
+                df = pd.read_excel(uploaded_file)
+            
+            st.info(f"📊 Datos cargados: {len(df)} filas, {len(df.columns)} columnas")
+            
+            # Display original data preview
+            st.subheader("📋 Vista Previa de Datos Originales")
+            st.dataframe(df.head(10), use_container_width=True)
+            
+            # Validate required columns
+            calculator = WorkHoursCalculator()
+            required_columns = ['DIA', 'Hora Inicio Labores', 'Hora Término Labores', 'Labor/Actividad']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                st.error(f"❌ Faltan columnas requeridas: {', '.join(missing_columns)}")
+                st.stop()
+            
+            # Process the data
+            if st.button("🚀 Procesar Horas de Trabajo", type="primary"):
+                with st.spinner("Procesando horas de trabajo... Esto puede tomar un momento."):
+                    try:
+                        processed_df = calculator.process_dataframe(df)
+                        
+                        st.success("✅ ¡Procesamiento completado exitosamente!")
+                        
+                        # Display results
+                        st.subheader("📊 Resultados Procesados")
+                        st.dataframe(processed_df, use_container_width=True)
+                        
+                        # Summary statistics
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            total_regular = processed_df['Horas Normales'].sum()
+                            st.metric("Total Horas Regulares", f"{total_regular:.2f}")
+                        
+                        with col2:
+                            total_overtime = processed_df[['Extra 25%', 'Extra 35%']].sum().sum()
+                            st.metric("Total Horas Extras", f"{total_overtime:.2f}")
+                        
+                        with col3:
+                            total_weekend = processed_df[['Horas Domingo/Feriado', 'Horas Extra Domingo/Feriado']].sum().sum()
+                            st.metric("Total Horas Fines de Semana/Feriados", f"{total_weekend:.2f}")
+                        
+                        with col4:
+                            total_hours = processed_df['Total Horas'].sum()
+                            st.metric("Total General de Horas", f"{total_hours:.2f}")
+                        
+                        # Download section
+                        st.subheader("📥 Descargar Resultados")
+                        
+                        # Prepare download
+                        excel_data = convert_df_to_excel(processed_df)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"horas_trabajo_procesadas_{timestamp}.xlsx"
+                        
+                        st.download_button(
+                            label="📥 Descargar Archivo Excel Procesado",
+                            data=excel_data,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error procesando datos: {str(e)}")
+                        st.exception(e)
+        
+        except Exception as e:
+            st.error(f"❌ Error leyendo archivo: {str(e)}")
+            st.exception(e)
+    
     else:
-        columnas_ingreso = df.columns.tolist()
+        st.info("👆 Por favor sube un archivo Excel para comenzar")
+        
+        # Show sample data format
+        st.subheader("📋 Formato Excel Esperado")
+        sample_data = {
+            'DIA': ['Lunes', 'Martes', 'Domingo'],
+            'Hora Inicio Labores': ['08:00:00', '14:00:00', '09:00:00'],
+            'Hora Término Labores': ['17:00:00', '23:00:00', '18:00:00'],
+            'Labor/Actividad': ['Regular', 'Regular', 'Trabajo Feriado'],
+            'Hora Inicio Refrigerio': ['13:00:00', '', ''],
+            'Hora Término Refrigerio': ['14:00:00', '', '']
+        }
+        sample_df = pd.DataFrame(sample_data)
+        st.dataframe(sample_df, use_container_width=True)
 
-        # Aplicar procesamiento de filas
-        resultados = df.apply(procesar_fila, axis=1, result_type="expand")
-        df_resultado = pd.concat([df, resultados], axis=1)
-
-        # Agregar la columna "DIA-TRA"
-        df_resultado["DIA-TRA"] = df_resultado.apply(calcular_dia_tra, axis=1)
-
-        # Reordenar las columnas según tu requerimiento
-        columnas_orden = [
-            "Horas Diurnas", "Extra 25%", "Extra 35%", "Horas Nocturnas",
-            "Extra 25% Nocturna", "Extra 35% Nocturna",
-            "Horas Domingo/Feriado", "Horas Extra Domingo/Feriado",
-            "Horas Normales", "Total Horas"
-        ]
-        df_resultado = df_resultado[columnas_ingreso + ["DIA-TRA"] + columnas_orden]
-
-        # Mostrar el reporte procesado
-        st.write("Reporte procesado:", df_resultado)
-
-        # Botón para descargar el archivo procesado
-        st.download_button(
-            label="Descargar reporte",
-            data=df_resultado.to_excel(index=False),
-            file_name="reporte_horas_final.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+if __name__ == "__main__":
+    main()
